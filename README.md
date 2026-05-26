@@ -71,9 +71,11 @@ Gmail SMTP 需要使用 App Password：
 
 在仓库页面进入：
 
-`Actions -> Daily Kaoyan Email -> Run workflow`
+`Actions -> Daily Kaoyan Email v2 -> Run workflow`
 
 第一次建议手动运行一次，确认邮件能收到。之后会每天自动运行。
+
+如果 GitHub 网页的 `Run workflow` 按钮临时排队失败，可以修改 `.run-email-v2` 文件后推送到 `main`，这个文件的变化也会触发一次发送。
 
 ## 注意
 

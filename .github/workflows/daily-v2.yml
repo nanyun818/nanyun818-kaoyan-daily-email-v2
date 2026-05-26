@@ -1,4 +1,6 @@
-name: Daily Kaoyan Email
+name: Daily Kaoyan Email v2
+
+run-name: 每日考研邮件 v2
 
 on:
   workflow_dispatch:
@@ -6,13 +8,21 @@ on:
     branches:
       - main
     paths:
-      - ".run-email-now"
+      - ".run-email-v2"
   schedule:
     # 00:07 UTC = 08:07 Asia/Shanghai. Avoid the top of the hour.
     - cron: "7 0 * * *"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-kaoyan-email-v2
+  cancel-in-progress: true
+
 jobs:
-  send-email:
+  send-email-v2:
+    name: Generate and send email v2
     runs-on: ubuntu-latest
 
     steps:
