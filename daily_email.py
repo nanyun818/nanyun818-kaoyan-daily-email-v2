@@ -83,18 +83,26 @@ def generate_body(date_text: str, topic: str) -> str:
 
 
 def send_email(subject: str, body: str) -> None:
-    gmail_user = require_env("GMAIL_USER")
-    gmail_password = require_env("GMAIL_APP_PASSWORD").replace(" ", "")
+    smtp_host = os.getenv("SMTP_HOST") or "smtp.gmail.com"
+    smtp_port = int(os.getenv("SMTP_PORT") or "465")
+    smtp_user = os.getenv("SMTP_USER") or os.getenv("GMAIL_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD") or os.getenv("GMAIL_APP_PASSWORD")
+    if not smtp_user:
+        raise RuntimeError("Missing required environment variable: SMTP_USER or GMAIL_USER")
+    if not smtp_password:
+        raise RuntimeError("Missing required environment variable: SMTP_PASSWORD or GMAIL_APP_PASSWORD")
+    smtp_password = smtp_password.replace(" ", "")
+    from_email = os.getenv("FROM_EMAIL") or smtp_user
     to_email = require_env("TO_EMAIL")
 
     message = EmailMessage()
-    message["From"] = gmail_user
+    message["From"] = from_email
     message["To"] = to_email
     message["Subject"] = subject
     message.set_content(body)
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(gmail_user, gmail_password)
+    with smtplib.SMTP_SSL(smtp_host, smtp_port) as smtp:
+        smtp.login(smtp_user, smtp_password)
         smtp.send_message(message)
 
 

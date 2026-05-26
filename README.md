@@ -20,11 +20,26 @@
 | `DEEPSEEK_API_KEY` | 你的 DeepSeek API Key |
 | `DEEPSEEK_MODEL` | 可选，默认使用 `deepseek-v4-flash` |
 | `DEEPSEEK_BASE_URL` | 可选，默认使用 `https://api.deepseek.com` |
-| `GMAIL_USER` | 发件 Gmail，例如 `zrf051231@gmail.com` |
-| `GMAIL_APP_PASSWORD` | Gmail App Password，不是网页登录密码 |
 | `TO_EMAIL` | 收件邮箱，例如 `zrf051231@gmail.com` |
 
-如果 `GMAIL_USER` 和 `TO_EMAIL` 都是同一个邮箱，也可以都填 `zrf051231@gmail.com`。
+发件方式二选一：
+
+| Name | Value |
+| --- | --- |
+| `GMAIL_USER` | 发件 Gmail，例如 `zrf051231@gmail.com` |
+| `GMAIL_APP_PASSWORD` | Gmail App Password，不是网页登录密码 |
+
+或使用通用 SMTP：
+
+| Name | Value |
+| --- | --- |
+| `SMTP_HOST` | SMTP 服务器，例如 `smtp.qq.com`、`smtp.163.com` |
+| `SMTP_PORT` | SMTP SSL 端口，默认 `465` |
+| `SMTP_USER` | SMTP 登录账号 |
+| `SMTP_PASSWORD` | SMTP 授权码或应用专用密码 |
+| `FROM_EMAIL` | 可选，发件人邮箱；不填则使用 `SMTP_USER` |
+
+`TO_EMAIL` 可以继续填 `zrf051231@gmail.com`，也就是发到你的 Gmail。
 
 ## Gmail App Password
 
