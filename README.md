@@ -41,6 +41,8 @@
 
 `TO_EMAIL` 可以继续填 `zrf051231@gmail.com`，也就是发到你的 Gmail。
 
+填写 GitHub Secret 时，`Name` 和 `Secret` 要分开填；`Secret` 里只填值本身。比如 `Name` 填 `SMTP_HOST`，`Secret` 只填 `smtp.qq.com`，不要填成 `SMTP_HOST=smtp.qq.com`。
+
 ## Gmail App Password
 
 Gmail SMTP 需要使用 App Password：

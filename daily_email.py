@@ -23,9 +23,20 @@ DS_TOPICS = [
 
 
 def require_env(name: str) -> str:
-    value = os.getenv(name)
+    value = clean_env(name)
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+def clean_env(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    value = value.strip()
+    prefix = f"{name}="
+    if value.startswith(prefix):
+        value = value[len(prefix):].strip()
     return value
 
 
@@ -61,10 +72,10 @@ def build_prompt(date_text: str, topic: str) -> str:
 def generate_body(date_text: str, topic: str) -> str:
     client = OpenAI(
         api_key=require_env("DEEPSEEK_API_KEY"),
-        base_url=os.getenv("DEEPSEEK_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL,
+        base_url=clean_env("DEEPSEEK_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL,
     )
     response = client.chat.completions.create(
-        model=os.getenv("DEEPSEEK_MODEL") or DEFAULT_DEEPSEEK_MODEL,
+        model=clean_env("DEEPSEEK_MODEL") or DEFAULT_DEEPSEEK_MODEL,
         messages=[
             {
                 "role": "system",
@@ -83,16 +94,16 @@ def generate_body(date_text: str, topic: str) -> str:
 
 
 def send_email(subject: str, body: str) -> None:
-    smtp_host = os.getenv("SMTP_HOST") or "smtp.gmail.com"
-    smtp_port = int(os.getenv("SMTP_PORT") or "465")
-    smtp_user = os.getenv("SMTP_USER") or os.getenv("GMAIL_USER")
-    smtp_password = os.getenv("SMTP_PASSWORD") or os.getenv("GMAIL_APP_PASSWORD")
+    smtp_host = clean_env("SMTP_HOST") or "smtp.gmail.com"
+    smtp_port = int(clean_env("SMTP_PORT") or "465")
+    smtp_user = clean_env("SMTP_USER") or clean_env("GMAIL_USER")
+    smtp_password = clean_env("SMTP_PASSWORD") or clean_env("GMAIL_APP_PASSWORD")
     if not smtp_user:
         raise RuntimeError("Missing required environment variable: SMTP_USER or GMAIL_USER")
     if not smtp_password:
         raise RuntimeError("Missing required environment variable: SMTP_PASSWORD or GMAIL_APP_PASSWORD")
     smtp_password = smtp_password.replace(" ", "")
-    from_email = os.getenv("FROM_EMAIL") or smtp_user
+    from_email = clean_env("FROM_EMAIL") or smtp_user
     to_email = require_env("TO_EMAIL")
 
     message = EmailMessage()
