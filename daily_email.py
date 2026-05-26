@@ -44,6 +44,46 @@ CS408_TOPICS = [
     "计算机网络：分层模型、可靠传输、路由、拥塞控制与应用层协议",
 ]
 
+ENGLISH_BANNED_TERMS = [
+    "determinant",
+    "matrix",
+    "linear algebra",
+    "calculus",
+    "integral",
+    "derivative",
+    "eigen",
+    "vector",
+    "rank",
+    "algorithm",
+    "data structure",
+    "stack",
+    "queue",
+    "binary tree",
+    "operating system",
+    "computer organization",
+    "computer network",
+    "cpu",
+    "cache",
+    "408",
+    "行列式",
+    "矩阵",
+    "线性代数",
+    "微积分",
+    "积分",
+    "导数",
+    "特征值",
+    "向量",
+    "秩",
+    "算法",
+    "数据结构",
+    "栈",
+    "队列",
+    "二叉树",
+    "操作系统",
+    "计算机组成",
+    "计算机网络",
+]
+
 
 def clean_env(name: str) -> str | None:
     value = os.getenv(name)
@@ -72,7 +112,8 @@ def today_info() -> tuple[str, str, str]:
     return date_text, math_topic, ds_topic
 
 
-def build_prompt(date_text: str, math_topic: str, ds_topic: str) -> str:
+def build_prompt(date_text: str, math_topic: str, ds_topic: str, retry_reason: str = "") -> str:
+    retry_note = f"\n上一次输出需要修正的问题：{retry_reason}\n请严格修正后重新输出合法 JSON。" if retry_reason else ""
     return f"""
 请生成一封中文每日考研积累邮件的数据内容，日期：{date_text}。
 
@@ -80,10 +121,11 @@ def build_prompt(date_text: str, math_topic: str, ds_topic: str) -> str:
 
 内容结构要求：
 1. 英语一写作例句只给2到3句，必须少而精。
-2. 增加考研数学知识点，围绕基础阶段常见框架，可参考“张宇基础三十讲”覆盖的典型知识范围，但不要引用、复刻或改写教材原文和原题。
-3. 增加408专业课四门知识点：数据结构、计算机组成原理、操作系统、计算机网络，每门各给1个小知识点。
-4. 保留408数据结构算法每日一题，但篇幅适中。
-5. 不要编造真实考试年份、页码或教材原句。
+2. 英语例句必须是考研英语一作文可复用句，围绕教育、科技影响、环境保护、文化传承、青年责任、公共道德、消费观、健康、社会发展等常见作文主题；禁止写数学、408、算法、计算机专业课、矩阵、行列式、代码等内容。
+3. 增加考研数学知识点，围绕基础阶段常见框架，可参考“张宇基础三十讲”覆盖的典型知识范围，但不要引用、复刻或改写教材原文和原题。
+4. 增加408专业课四门知识点：数据结构、计算机组成原理、操作系统、计算机网络，每门各给1个小知识点。
+5. 保留408数据结构算法每日一题，但篇幅适中。
+6. 不要编造真实考试年份、页码或教材原句。
 
 今日数学主题倾向：{math_topic}
 今日数据结构算法主题倾向：{ds_topic}
@@ -151,6 +193,7 @@ JSON 格式必须完全匹配：
 - math 数组必须是2项。
 - cs408 数组必须是4项，且四门课各1项。
 - pitfalls 数组必须是2到3项。
+{retry_note}
 """.strip()
 
 
@@ -172,28 +215,57 @@ def parse_json_response(content: str) -> dict[str, Any]:
     return json.loads(content[start : end + 1])
 
 
+def validate_payload(payload: dict[str, Any]) -> None:
+    english_items = payload.get("english", [])
+    if not 2 <= len(english_items) <= 3:
+        raise ValueError("英语例句数量必须是2到3句。")
+
+    for item in english_items:
+        combined = " ".join(
+            [
+                as_text(item.get("sentence")),
+                as_text(item.get("translation")),
+                as_text(item.get("usage")),
+            ]
+        ).lower()
+        hits = [term for term in ENGLISH_BANNED_TERMS if term.lower() in combined]
+        if hits:
+            raise ValueError(f"英语例句混入了数学/408/计算机内容：{', '.join(hits[:3])}")
+
+
 def generate_payload(date_text: str, math_topic: str, ds_topic: str) -> dict[str, Any]:
     client = OpenAI(
         api_key=require_env("DEEPSEEK_API_KEY"),
         base_url=clean_env("DEEPSEEK_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL,
     )
-    response = client.chat.completions.create(
-        model=clean_env("DEEPSEEK_MODEL") or DEFAULT_DEEPSEEK_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a precise Chinese study coach for postgraduate entrance exam preparation. Return valid JSON only.",
-            },
-            {"role": "user", "content": build_prompt(date_text, math_topic, ds_topic)},
-        ],
-        temperature=0.7,
-        stream=False,
-        extra_body={"thinking": {"type": "disabled"}},
-    )
-    content = (response.choices[0].message.content or "").strip()
-    if not content:
-        raise RuntimeError("DeepSeek returned an empty response.")
-    return parse_json_response(content)
+    retry_reason = ""
+    for attempt in range(2):
+        response = client.chat.completions.create(
+            model=clean_env("DEEPSEEK_MODEL") or DEFAULT_DEEPSEEK_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a precise Chinese study coach for postgraduate entrance exam preparation. Return valid JSON only. Keep English I writing examples unrelated to math, algorithms, and computer science.",
+                },
+                {"role": "user", "content": build_prompt(date_text, math_topic, ds_topic, retry_reason)},
+            ],
+            temperature=0.7,
+            stream=False,
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+        content = (response.choices[0].message.content or "").strip()
+        if not content:
+            raise RuntimeError("DeepSeek returned an empty response.")
+        payload = parse_json_response(content)
+        try:
+            validate_payload(payload)
+            return payload
+        except ValueError as exc:
+            retry_reason = str(exc)
+            if attempt == 1:
+                raise
+
+    raise RuntimeError("DeepSeek failed to produce a valid daily email payload.")
 
 
 def as_text(value: Any) -> str:
