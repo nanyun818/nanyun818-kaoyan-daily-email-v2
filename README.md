@@ -17,11 +17,14 @@
 
 | Name | Value |
 | --- | --- |
-| `OPENAI_API_KEY` | 你的 OpenAI API Key |
-| `OPENAI_MODEL` | 可选，默认使用 `gpt-4.1-mini` |
+| `DEEPSEEK_API_KEY` | 你的 DeepSeek API Key |
+| `DEEPSEEK_MODEL` | 可选，默认使用 `deepseek-v4-flash` |
+| `DEEPSEEK_BASE_URL` | 可选，默认使用 `https://api.deepseek.com` |
 | `GMAIL_USER` | 发件 Gmail，例如 `zrf051231@gmail.com` |
 | `GMAIL_APP_PASSWORD` | Gmail App Password，不是网页登录密码 |
 | `TO_EMAIL` | 收件邮箱，例如 `zrf051231@gmail.com` |
+
+如果 `GMAIL_USER` 和 `TO_EMAIL` 都是同一个邮箱，也可以都填 `zrf051231@gmail.com`。
 
 ## Gmail App Password
 
@@ -33,6 +36,14 @@ Gmail SMTP 需要使用 App Password：
 4. 把生成的 16 位密码填入 `GMAIL_APP_PASSWORD`。
 
 如果密码中显示有空格，可以原样复制；脚本会自动去掉空格。
+
+如果 App Password 页面提示“您的账号不支持您正在尝试的设置”，通常说明当前 Google 账号不能创建应用专用密码。常见原因包括：没有开启两步验证、账号只使用安全密钥作为两步验证方式、账号属于工作/学校/组织管理，或开启了高级保护计划。
+
+这种情况下可以改用其他发件方式，例如：
+
+- 换一个可以创建 App Password 的 Gmail 账号作为发件邮箱。
+- 使用 QQ 邮箱、163 邮箱等支持 SMTP 授权码的邮箱。
+- 使用 Resend、SendGrid 等邮件发送服务。
 
 ## 手动测试
 

@@ -8,7 +8,8 @@ from openai import OpenAI
 
 
 TIMEZONE = "Asia/Shanghai"
-DEFAULT_MODEL = "gpt-4.1-mini"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 DS_TOPICS = [
     "linear lists and linked-list pointer manipulation",
@@ -58,14 +59,26 @@ def build_prompt(date_text: str, topic: str) -> str:
 
 
 def generate_body(date_text: str, topic: str) -> str:
-    client = OpenAI(api_key=require_env("OPENAI_API_KEY"))
-    response = client.responses.create(
-        model=os.getenv("OPENAI_MODEL") or DEFAULT_MODEL,
-        input=build_prompt(date_text, topic),
+    client = OpenAI(
+        api_key=require_env("DEEPSEEK_API_KEY"),
+        base_url=os.getenv("DEEPSEEK_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL,
     )
-    body = response.output_text.strip()
+    response = client.chat.completions.create(
+        model=os.getenv("DEEPSEEK_MODEL") or DEFAULT_DEEPSEEK_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a precise Chinese study coach for postgraduate entrance exam preparation.",
+            },
+            {"role": "user", "content": build_prompt(date_text, topic)},
+        ],
+        temperature=0.7,
+        stream=False,
+        extra_body={"thinking": {"type": "disabled"}},
+    )
+    body = (response.choices[0].message.content or "").strip()
     if not body:
-        raise RuntimeError("OpenAI returned an empty response.")
+        raise RuntimeError("DeepSeek returned an empty response.")
     return body
 
 
