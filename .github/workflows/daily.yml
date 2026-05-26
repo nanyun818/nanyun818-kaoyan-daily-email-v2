@@ -2,6 +2,11 @@ name: Daily Kaoyan Email
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".run-email-now"
   schedule:
     # 00:07 UTC = 08:07 Asia/Shanghai. Avoid the top of the hour.
     - cron: "7 0 * * *"
