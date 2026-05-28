@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import smtplib
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
@@ -16,8 +16,11 @@ TIMEZONE = "Asia/Shanghai"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
 HISTORY_PATH = Path(__file__).with_name("sent_history.json")
-HISTORY_LIMIT = 14
+HISTORY_LIMIT = 260
 PLAN_START_DATE = datetime(2026, 5, 26, tzinfo=ZoneInfo(TIMEZONE)).date()
+REVIEW_INTERVALS = [1, 3, 7, 14, 30, 60, 120]
+NEW_TAG = "新学｜"
+REVIEW_TAG_PREFIX = "复习D-"
 
 ENGLISH_BASE_THEMES = [
     "教育公平与终身学习",
@@ -471,38 +474,265 @@ def pick_topic(bank: list[str], study_day: int, step: int = 1, offset: int = 0) 
     return bank[(study_day * step + offset) % len(bank)]
 
 
-def today_info() -> tuple[str, dict[str, Any]]:
+def tag_new_topic(topic: str) -> str:
+    return f"{NEW_TAG}{strip_study_tag(topic)}"
+
+
+def tag_review_topic(topic: str, interval: int, suffix: str = "") -> str:
+    return f"{REVIEW_TAG_PREFIX}{interval}{suffix}｜{strip_study_tag(topic)}"
+
+
+def is_review_topic(value: Any) -> bool:
+    return as_text(value).startswith(REVIEW_TAG_PREFIX)
+
+
+def is_new_topic(value: Any) -> bool:
+    text = as_text(value)
+    return bool(text) and not is_review_topic(text)
+
+
+def strip_study_tag(value: Any) -> str:
+    text = as_text(value)
+    if text.startswith(NEW_TAG):
+        return text[len(NEW_TAG) :]
+    if text.startswith(REVIEW_TAG_PREFIX) and "｜" in text:
+        return text.split("｜", 1)[1]
+    return text
+
+
+def parse_history_date(item: dict[str, Any]):
+    text = as_text(item.get("date"))[:10]
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def due_history_entries(history: list[dict[str, Any]], date_text: str) -> list[tuple[int, dict[str, Any]]]:
+    try:
+        today = datetime.strptime(date_text[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return []
+    due_dates = {today - timedelta(days=interval): interval for interval in REVIEW_INTERVALS}
+    entries: list[tuple[int, dict[str, Any]]] = []
+    for item in reversed(history):
+        item_date = parse_history_date(item)
+        if item_date in due_dates:
+            entries.append((due_dates[item_date], item))
+    return sorted(entries, key=lambda pair: pair[0], reverse=True)
+
+
+def split_cs408_point(value: Any) -> tuple[str, str]:
+    text = as_text(value)
+    for separator in (":", "："):
+        if separator in text:
+            course, point = text.split(separator, 1)
+            return as_text(course), strip_study_tag(point)
+    return "", strip_study_tag(text)
+
+
+def entry_math_sources(item: dict[str, Any]) -> list[str]:
+    plan = item.get("plan")
+    if isinstance(plan, dict) and isinstance(plan.get("math_topics"), list):
+        return [
+            strip_study_tag(topic)
+            for topic in plan["math_topics"]
+            if is_new_topic(topic)
+        ]
+    return [as_text(topic) for topic in item.get("math_topics", []) if as_text(topic)]
+
+
+def entry_cs408_sources(item: dict[str, Any]) -> list[tuple[str, str]]:
+    plan = item.get("plan")
+    if isinstance(plan, dict) and isinstance(plan.get("cs408_topics"), dict):
+        return [
+            (as_text(course), strip_study_tag(topic))
+            for course, topic in plan["cs408_topics"].items()
+            if is_new_topic(topic)
+        ]
+
+    sources: list[tuple[str, str]] = []
+    for raw_point in item.get("cs408_points", []):
+        course, point = split_cs408_point(raw_point)
+        if course and point:
+            sources.append((course, point))
+    return sources
+
+
+def entry_algorithm_source(item: dict[str, Any]) -> tuple[str, str] | None:
+    plan = item.get("plan")
+    if isinstance(plan, dict):
+        topic = plan.get("ds_algorithm_topic")
+        if is_new_topic(topic):
+            return strip_study_tag(topic), as_text(item.get("algorithm_problem"))
+        return None
+
+    title = as_text(item.get("algorithm_title"))
+    if not title:
+        return None
+    return title, as_text(item.get("algorithm_problem"))
+
+
+def pick_due_math_review(history: list[dict[str, Any]], date_text: str) -> tuple[str, int] | None:
+    for interval, item in due_history_entries(history, date_text):
+        for topic in entry_math_sources(item):
+            if topic:
+                return topic, interval
+    return None
+
+
+def pick_due_cs408_review(
+    history: list[dict[str, Any]],
+    date_text: str,
+    course_name: str,
+) -> tuple[str, int] | None:
+    for interval, item in due_history_entries(history, date_text):
+        for course, point in entry_cs408_sources(item):
+            if course == course_name and point:
+                return point, interval
+    return None
+
+
+def pick_due_algorithm_review(history: list[dict[str, Any]], date_text: str) -> tuple[str, int, str] | None:
+    for interval, item in due_history_entries(history, date_text):
+        source = entry_algorithm_source(item)
+        if source:
+            title, problem = source
+            return title, interval, problem
+    return None
+
+
+def pick_unseen_topic(
+    bank: list[str],
+    study_day: int,
+    step: int = 1,
+    offset: int = 0,
+    used_keys: set[str] | None = None,
+) -> str:
+    used_keys = used_keys if used_keys is not None else set()
+    for shift in range(len(bank)):
+        topic = bank[(study_day * step + offset + shift) % len(bank)]
+        key = norm_key(topic)
+        if key and key not in used_keys:
+            used_keys.add(key)
+            return topic
+
+    topic = pick_topic(bank, study_day, step=step, offset=offset)
+    used_keys.add(norm_key(topic))
+    return topic
+
+
+def today_info() -> tuple[str, int]:
     now = datetime.now(ZoneInfo(TIMEZONE))
     study_day = max((now.date() - PLAN_START_DATE).days, 0)
     date_text = now.strftime("%Y-%m-%d")
-    plan = {
-        "study_day": study_day + 1,
-        "english_theme": pick_topic(ENGLISH_THEMES, study_day, step=11),
-        "math_topics": [
-            pick_topic(MATH_TOPICS, study_day, step=31),
-            pick_topic(
-                MATH_TOPICS,
-                study_day,
-                step=31,
-                offset=5,
-            ),
-        ],
-        "cs408_topics": {
-            course: pick_topic(
+    return date_text, study_day
+
+
+def build_daily_plan(date_text: str, study_day: int, history: list[dict[str, Any]]) -> dict[str, Any]:
+    review_sources: list[str] = []
+
+    recent_math_keys = {
+        norm_key(topic)
+        for item in history[-7:]
+        for topic in item.get("math_topics", [])
+        if norm_key(topic)
+    }
+    math_used_keys = set(recent_math_keys)
+    math_topics = [
+        tag_new_topic(pick_unseen_topic(MATH_TOPICS, study_day, step=31, used_keys=math_used_keys))
+    ]
+    math_review = pick_due_math_review(history, date_text)
+    if math_review:
+        review_topic, interval = math_review
+        math_topics.append(tag_review_topic(review_topic, interval))
+        review_sources.append(f"数学 D-{interval}：{review_topic}")
+    else:
+        math_topics.append(
+            tag_new_topic(
+                pick_unseen_topic(
+                    MATH_TOPICS,
+                    study_day,
+                    step=31,
+                    offset=5,
+                    used_keys=math_used_keys,
+                )
+            )
+        )
+
+    cs408_used_keys: dict[str, set[str]] = {course: set() for course in CS408_TOPIC_BANKS}
+    for item in history[-7:]:
+        for raw_point in item.get("cs408_points", []):
+            course, point = split_cs408_point(raw_point)
+            if course in cs408_used_keys and norm_key(point):
+                cs408_used_keys[course].add(norm_key(point))
+
+    course_names = list(CS408_TOPIC_BANKS)
+    review_candidates = {
+        course: pick_due_cs408_review(history, date_text, course)
+        for course in course_names
+    }
+    review_priority = sorted(
+        course_names,
+        key=lambda course: (course_names.index(course) - study_day) % len(course_names),
+    )
+    review_courses: set[str] = set()
+    for course in review_priority:
+        if review_candidates[course] and len(review_courses) < 2:
+            review_courses.add(course)
+
+    cs408_topics: dict[str, str] = {}
+    for offset, (course, topics) in enumerate(CS408_TOPIC_BANKS.items()):
+        review_candidate = review_candidates[course]
+        if course in review_courses and review_candidate:
+            review_point, interval = review_candidate
+            cs408_topics[course] = tag_review_topic(review_point, interval)
+            review_sources.append(f"408-{course} D-{interval}：{review_point}")
+            continue
+
+        cs408_topics[course] = tag_new_topic(
+            pick_unseen_topic(
                 topics,
                 study_day,
                 step=7,
                 offset=offset * 37,
+                used_keys=cs408_used_keys[course],
             )
-            for offset, (course, topics) in enumerate(CS408_TOPIC_BANKS.items())
-        },
-        "ds_algorithm_topic": pick_topic(
-            DS_ALGORITHM_TOPICS,
-            study_day,
-            step=7,
-        ),
+        )
+
+    recent_algo_keys = {
+        norm_key(item.get("algorithm_title"))
+        for item in history[-7:]
+        if norm_key(item.get("algorithm_title"))
     }
-    return date_text, plan
+    algorithm_review = pick_due_algorithm_review(history, date_text)
+    if algorithm_review:
+        algorithm_topic, interval, old_problem = algorithm_review
+        ds_algorithm_topic = tag_review_topic(algorithm_topic, interval, suffix="变式")
+        review_note = f"算法 D-{interval}：{algorithm_topic}"
+        if old_problem:
+            review_note += f"；旧题摘要：{old_problem[:80]}"
+        review_sources.append(review_note)
+    else:
+        ds_algorithm_topic = tag_new_topic(
+            pick_unseen_topic(
+                DS_ALGORITHM_TOPICS,
+                study_day,
+                step=7,
+                used_keys=recent_algo_keys,
+            )
+        )
+
+    plan = {
+        "study_day": study_day + 1,
+        "review_intervals": REVIEW_INTERVALS,
+        "english_theme": pick_topic(ENGLISH_THEMES, study_day, step=11),
+        "math_topics": math_topics,
+        "cs408_topics": cs408_topics,
+        "ds_algorithm_topic": ds_algorithm_topic,
+        "review_sources": review_sources,
+    }
+    return plan
 
 
 def build_prompt(
@@ -513,6 +743,12 @@ def build_prompt(
 ) -> str:
     retry_note = f"\n上一次输出需要修正的问题：{retry_reason}\n请严格修正后重新输出合法 JSON。" if retry_reason else ""
     date_seed = date_text.replace("-", "")
+    review_intervals = "、".join(f"D-{interval}" for interval in plan.get("review_intervals", REVIEW_INTERVALS))
+    math_plan = "\n".join(f"- {topic}" for topic in plan["math_topics"])
+    cs408_plan = "\n".join(
+        f"- {course}：{topic}" for course, topic in plan["cs408_topics"].items()
+    )
+    review_sources = "\n".join(f"- {source}" for source in plan.get("review_sources", []))
     return f"""
 请生成一封中文每日考研积累邮件的数据内容，日期：{date_text}。
 
@@ -526,15 +762,20 @@ def build_prompt(
 4. 增加408专业课四门知识点：数据结构、计算机组成原理、操作系统、计算机网络，每门各给1个小知识点。
 5. 保留408数据结构算法每日一题，但篇幅适中。
 6. 不要编造真实考试年份、页码或教材原句。
-7. 每天内容必须不同。不要复用历史中的英语句子、数学知识点标题、408知识点标题、算法题标题或相同题型。
+7. 使用间隔复习策略：新学内容要尽量避开最近历史；标记为“复习D-x”的内容表示复习 x 天前学过的内容，要用回忆提示、易错辨析、变式题或重新组织的步骤来巩固，不能逐字复制旧邮件。复习项允许围绕旧主题出现，但表达、例子和题目必须变化。
 
 今日日期种子：{date_seed}
 今日计划序号：第{plan["study_day"]}天
+今日记忆策略：按遗忘曲线安排 {review_intervals} 到期复习；今天只推送少量复习，避免负担过重。
 今日英语作文主题：{plan["english_theme"]}
-今日数学指定主题：{"；".join(plan["math_topics"])}
+今日数学指定主题：
+{math_plan}
 今日408四门指定知识点：
-{"；".join(f"{course}：{topic}" for course, topic in plan["cs408_topics"].items())}
+{cs408_plan}
 今日数据结构算法大题指定方向：{plan["ds_algorithm_topic"]}
+
+今日到期复习来源：
+{review_sources or "暂无到期复习，今天以新学为主。"}
 
 最近已发送内容摘要，今天必须避开：
 {history_context or "暂无历史记录。"}
@@ -598,9 +839,9 @@ JSON 格式必须完全匹配：
 
 数量要求：
 - english 数组必须是2到3项。
-- math 数组必须是2项，且必须分别对应“今日数学指定主题”的两个主题。
-- cs408 数组必须是4项，且四门课各1项；每项必须对应“今日408四门指定知识点”。
-- algorithm 必须对应“今日数据结构算法大题指定方向”，不得改成其他链表/树/图/排序题型。
+- math 数组必须是2项，且必须分别对应“今日数学指定主题”的两个主题；“新学”讲新知识，“复习D-x”做回忆巩固。
+- cs408 数组必须是4项，且四门课各1项；每项必须对应“今日408四门指定知识点”；复习项要换成提问式、判断式或易错辨析式表达。
+- algorithm 必须对应“今日数据结构算法大题指定方向”，不得改成其他链表/树/图/排序题型；如果是“复习D-x变式”，必须出同一核心算法的变式题，不能原题照搬。
 - pitfalls 数组必须是2到3项。
 {retry_note}
 """.strip()
@@ -641,18 +882,22 @@ def load_history() -> list[dict[str, Any]]:
     return [item for item in data if isinstance(item, dict)]
 
 
-def save_history(date_text: str, payload: dict[str, Any]) -> None:
+def save_history(date_text: str, payload: dict[str, Any], plan: dict[str, Any]) -> None:
     history = load_history()
-    history.append(summarize_payload(date_text, payload))
+    history.append(summarize_payload(date_text, payload, plan))
     HISTORY_PATH.write_text(
         json.dumps(history[-HISTORY_LIMIT:], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
 
-def summarize_payload(date_text: str, payload: dict[str, Any]) -> dict[str, Any]:
+def summarize_payload(
+    date_text: str,
+    payload: dict[str, Any],
+    plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     algo = payload.get("algorithm", {})
-    return {
+    summary = {
         "date": date_text,
         "fingerprint": payload_fingerprint(payload),
         "english": [as_text(item.get("sentence")) for item in payload.get("english", [])],
@@ -664,6 +909,9 @@ def summarize_payload(date_text: str, payload: dict[str, Any]) -> dict[str, Any]
         "algorithm_title": as_text(algo.get("title")),
         "algorithm_problem": as_text(algo.get("problem"))[:180],
     }
+    if plan:
+        summary["plan"] = plan
+    return summary
 
 
 def format_history_context(history: list[dict[str, Any]], max_items: int = 7) -> str:
@@ -734,7 +982,11 @@ def validate_payload(payload: dict[str, Any], history: list[dict[str, Any]], pla
         for topic in item.get("math_topics", [])
         if norm_key(topic)
     }
-    if previous_math_topics.intersection(norm_key(topic) for topic in current_math_topics):
+    repeated_math_topics = previous_math_topics.intersection(
+        norm_key(topic) for topic in current_math_topics
+    )
+    math_review_allowed = any(is_review_topic(topic) for topic in plan.get("math_topics", []))
+    if repeated_math_topics and not math_review_allowed:
         raise ValueError("数学知识点标题与最近历史重复。")
 
     cs408_items = payload.get("cs408", [])
@@ -755,7 +1007,21 @@ def validate_payload(payload: dict[str, Any], history: list[dict[str, Any]], pla
         for point in item.get("cs408_points", [])
         if norm_key(point)
     }
-    if previous_cs408_points.intersection(norm_key(point) for point in current_cs408_points):
+    repeated_cs408_points = previous_cs408_points.intersection(
+        norm_key(point) for point in current_cs408_points
+    )
+    review_courses = {
+        course
+        for course, topic in plan.get("cs408_topics", {}).items()
+        if is_review_topic(topic)
+    }
+    repeated_outside_review = [
+        point
+        for item, point in zip(cs408_items, current_cs408_points)
+        if norm_key(point) in repeated_cs408_points
+        and as_text(item.get("course")) not in review_courses
+    ]
+    if repeated_outside_review:
         raise ValueError("408四门知识点与最近历史重复。")
 
     previous_algo_titles = {
@@ -764,7 +1030,8 @@ def validate_payload(payload: dict[str, Any], history: list[dict[str, Any]], pla
         if as_text(item.get("algorithm_title"))
     }
     current_algo_title = as_text(payload.get("algorithm", {}).get("title")).lower()
-    if current_algo_title and current_algo_title in previous_algo_titles:
+    algorithm_review_allowed = is_review_topic(plan.get("ds_algorithm_topic"))
+    if current_algo_title and current_algo_title in previous_algo_titles and not algorithm_review_allowed:
         raise ValueError("算法题标题与最近历史重复。")
 
     expected_fragments = [
@@ -1030,13 +1297,14 @@ def send_email(subject: str, text_body: str, html_body: str) -> None:
 
 
 def main() -> None:
-    date_text, plan = today_info()
+    date_text, study_day = today_info()
     subject_suffix = clean_env("EMAIL_SUBJECT_SUFFIX") or ""
     subject = f"考研每日积累 | 英一 + 数学 + 408 | {date_text}{subject_suffix}"
     history = load_history()
+    plan = build_daily_plan(date_text, study_day, history)
     payload = generate_payload(date_text, plan, history)
     send_email(subject, render_text(payload, date_text), render_html(payload, date_text))
-    save_history(date_text, payload)
+    save_history(date_text, payload, plan)
     print(f"sent: {subject}")
 
 
